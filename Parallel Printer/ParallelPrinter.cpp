@@ -1,14 +1,5 @@
 #include "ParallelPrinter.h"
 
-#include <CGAL/IO/STL_reader.h>
-#include <CGAL/Polygon_mesh_processing/clip.h>
-#include <CGAL/Polygon_mesh_processing/measure.h>
-#include <CGAL/Polygon_mesh_processing/repair.h>
-#include <CGAL/nearest_neighbor_delaunay_2.h>
-#include <CGAL/Orthogonal_k_neighbor_search.h>
-#include <CGAL/Search_traits_3.h>
-#include <CGAL/Surface_mesh/IO.h>
-
 #include <omp.h>
 
 #include <algorithm>
@@ -76,59 +67,32 @@ inline const std::pair<K1::Point_3, K1::Vector_3> hardPlane(
 ///////////////////////////////////////////////////////////////////////////////
 // CGAL Mesh Operations
 
+bool validate(Mesh& mesh, bool throwOnFail)
+{
+	if(!CGAL::Polygon_mesh_processing::triangulate_faces(mesh))
+	{
+		if(throwOnFail)
+			throw std::runtime_error("Mesh not triangulated!");
+	}
+
+	CGAL::Polygon_mesh_processing::autorefine(mesh);
+
+	if(CGAL::Polygon_mesh_processing::does_self_intersect(mesh))
+	{
+		if(throwOnFail)
+			throw std::runtime_error("Mesh self-intersects!");
+		return false;
+	}
+
+	return true;
+}
+
 void loadSTLMesh(const std::string& filename, Mesh* cgalMesh)
 {
-	std::ifstream inputFile(filename, std::ifstream::in);
-	std::vector<CGAL::cpp11::array<double, 3>> points;
-	std::vector<CGAL::cpp11::array<int, 3>> triangles;
-	CGAL::read_STL(inputFile, points, triangles);
-	inputFile.close();
-
-	std::vector<Mesh::Vertex_index> vertices;
-	vertices.reserve(points.size());
-
-	for(auto& pt: points)
-	{
-		Mesh::Vertex_index v = cgalMesh->add_vertex(
-			K1::Point_3(pt[0], pt[1], pt[2]));
-		vertices.push_back(v);
-	}
-
-	for(auto& tri: triangles)
-	{
-		cgalMesh->add_face(
-			vertices[tri[0]],
-			vertices[tri[1]],
-			vertices[tri[2]]);
-	}
+	if(!PMP::IO::read_polygon_mesh(filename, *cgalMesh))
+		throw std::runtime_error(filename + " could not be loaded!");
 }
 
-void preprocessMesh(Mesh* mesh)
-{
-	std::cout << "Validating mesh..." << std::endl;
-
-	if(!CGAL::is_closed(*mesh))
-	{
-		std::cerr << "MESH ERROR: Mesh is not closed!" << std::endl;
-		return;
-	}
-
-	if(CGAL::Polygon_mesh_processing::does_self_intersect(*mesh))
-	{
-		std::cerr << "MESH ERROR: Mesh self-intersects! Attempting repair..." << std::endl;
-		CGAL::Polygon_mesh_processing::remove_self_intersections(*mesh);
-		if(CGAL::Polygon_mesh_processing::does_self_intersect(*mesh))
-		{
-			std::cerr << "Failed to repair. Exiting." << std::endl;
-			return;
-		} else
-		{
-			std::cout << "Successfully repaired! Continuing..." << std::endl;
-		}
-	}
-
-	std::cout << "Mesh is valid." << std::endl;
-}
 
 inline K1::Point_3 getCentroid(const Mesh& mesh)
 {
@@ -173,17 +137,16 @@ int leastSquaresFit(
 
 bool slice(const Mesh& inMesh, const HardPlane& p, Mesh* outMesh)
 {
-	if(CGAL::Polygon_mesh_processing::does_self_intersect(inMesh))
-		return false;
-
 	*outMesh = Mesh(inMesh);
 
-	CGAL::Polygon_mesh_processing::clip(
+	bool result = CGAL::Polygon_mesh_processing::clip(
 		*outMesh, 
 		K1::Plane_3(p.first, p.second), 
 		CGAL::Polygon_mesh_processing::parameters::clip_volume(true));
 
-	return true;
+	result &= validate(*outMesh, false);
+
+	return result;
 }
 
 
@@ -633,22 +596,7 @@ PrinterArrayState ParallelPrinter::subdivide(
 		if(node == nullptr)
 			continue;
 
-		if(!CGAL::is_closed(node->data))
-		{
-			std::cerr << "MESH ERROR: Mesh is not closed!" << std::endl;
-		}
-		if(CGAL::Polygon_mesh_processing::does_self_intersect(node->data))
-		{
-			std::cerr << "MESH ERROR: Mesh self-intersects! Attempting repair..." << std::endl;
-			CGAL::Polygon_mesh_processing::remove_self_intersections(node->data);
-			if(CGAL::Polygon_mesh_processing::does_self_intersect(node->data))
-			{
-				std::cerr << "Failed to repair." << std::endl;
-			} else
-			{
-				std::cout << "Successfully repaired!" << std::endl;
-			}
-		}
+		validate(node->data, false);
 
 		K1::Point_3 centroid;
 		std::vector<NormalFitnessPair> normals;
@@ -1340,9 +1288,8 @@ void ParallelPrinter::exportSubdivisionNodes(const std::vector<SubdivisionMeshNo
 			continue;
 
 		std::stringstream ss("");
-		ss << "split_out/" << node->id << ".off";
-		CGAL::write_mesh(node->data, ss.str());
-		std::system(("meshconv " + ss.str() + " -c stl > /dev/null").c_str());
+		ss << node->id << ".stl";
+        CGAL::IO::write_STL("split_out/" + ss.str(), node->data);
 	}
 }
 
@@ -1351,9 +1298,8 @@ void ParallelPrinter::exportIntermediaryNodes(const SubdivisionMeshNode& node)
 	for(const auto& child: node.children)
 	{
 		std::stringstream ss("");
-		ss << "split_out/inters/" << node.id << ".off";
-		CGAL::write_mesh(child->data, ss.str());
-		std::system(("meshconv " + ss.str() + " -c stl > /dev/null").c_str());
+		ss << node.id << ".stl";
+        CGAL::IO::write_STL("split_out/inters/" + ss.str(), node.data);
 
 		exportIntermediaryNodes(*child);
 	}
@@ -1476,7 +1422,7 @@ ParallelPrinter::ParallelPrinter(const std::string& inputFile)
 
 	Mesh cgalMesh;
 	loadSTLMesh(args.inputFile, &cgalMesh);
-	preprocessMesh(&cgalMesh);
+	validate(cgalMesh, true);
 
 	if(!args.minVolume.has_value())
 		args.minVolume =

@@ -13,10 +13,23 @@
 //
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Polyhedron_3.h>
-#include <CGAL/IO/Polyhedron_iostream.h>
 #include <CGAL/linear_least_squares_fitting_3.h>
 #include <CGAL/centroid.h>
 #include <CGAL/enum.h>
+
+#include <CGAL/Polygon_mesh_processing/IO/polygon_mesh_io.h>
+#include <CGAL/Polygon_mesh_processing/clip.h>
+#include <CGAL/Polygon_mesh_processing/measure.h>
+#include <CGAL/Polygon_mesh_processing/triangulate_faces.h>
+#include <CGAL/Polygon_mesh_processing/repair_degeneracies.h>
+#include <CGAL/Polygon_mesh_processing/connected_components.h>
+#include <CGAL/Polygon_mesh_processing/autorefinement.h>
+#include <CGAL/nearest_neighbor_delaunay_2.h>
+#include <CGAL/Orthogonal_k_neighbor_search.h>
+#include <CGAL/Search_traits_3.h>
+
+namespace PMP = CGAL::Polygon_mesh_processing;
+
 
 #include <memory>
 #include <queue>
